@@ -14,7 +14,7 @@ from replay_buffer import ReplayBuffer, Transition
 
 def main():
     # Set up the environment
-    env = gym.make('CarRacing-v0')
+    env = gym.make('CarRacing-v2')
     env = gym.wrappers.GrayScaleObservation(env)  # Convert to grayscale
     env = gym.wrappers.ResizeObservation(env, (480, 640))  # Resize to match the preprocessor input
 
@@ -23,7 +23,7 @@ def main():
     # Hyperparameters
     feature_dim = 256
     scalar_dim = 0  # Since we don't have additional scalar observations
-    action_dim = env.action_space.shape[0]  # Should be 3 for CarRacing-v0
+    action_dim = env.action_space.shape[0]  # Should be 3 for CarRacing-v2
     input_height = 480
     input_width = 640
     total_episodes = 100
@@ -55,14 +55,15 @@ def main():
     total_steps = 0
 
     for episode in range(total_episodes):
-        obs = env.reset()
+        obs, info = env.reset()  # Updated for CarRacing-v2
         obs = obs / 255.0  # Normalize pixel values
         scalar_obs = np.array([])  # Empty since scalar_dim=0
         total_reward = 0
-        done = False
+        terminated = False
+        truncated = False
         step = 0
 
-        while not done and step < max_steps_per_episode:
+        while not (terminated or truncated) and step < max_steps_per_episode:
             # Uncomment the following line to render the environment
             # env.render()
 
@@ -73,9 +74,12 @@ def main():
             action = np.clip(action + np.random.normal(0, 0.1, size=action_dim), -1, 1)
 
             # Step the environment
-            next_obs, reward, done, info = env.step(action)
+            next_obs, reward, terminated, truncated, info = env.step(action)  # Updated for CarRacing-v2
             next_obs = next_obs / 255.0  # Normalize pixel values
             next_scalar_obs = np.array([])  # Empty since scalar_dim=0
+
+            # Determine done flag
+            done = terminated or truncated
 
             # Store the transition in the replay buffer
             transition = Transition(
