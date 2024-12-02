@@ -22,7 +22,7 @@ env_params = {
     'discrete_acc': [1.0],  # Discrete value of accelerations
     'discrete_steer': [-0.2, 0.0, 0.2],  # Discrete value of steering angles
     'continuous_accel_range': [-1.0, 1.0],  # Continuous acceleration range
-    'continuous_steer_range': [-1, 1],  # Continuous steering angle range
+    'continuous_steer_range': [-0.3, 0.3],  # Continuous steering angle range
     'ego_vehicle_filter': 'vehicle.lincoln*',  # Filter for defining ego vehicle
     'port': 2000,  # Connection port
     'town': 'Town03',  # Which town to simulate
@@ -44,49 +44,37 @@ env = gym.make('carla-v0', params=env_params)
 # Reset environment to get initial observation
 obs = env.reset()
 
-# Inspect the observation to understand its structure
-print("Observation keys:", obs.keys())
-
 # Extract image and scalars from observation
 image = obs['camera']  # Assuming 'camera' is the key for the image data
 
-# Since 'obs['state']' may contain complex data structures, we need to process it accordingly
-# For example, if it contains the vehicle's speed and location, extract those values
-
-# Initialize scalars as an empty list
-scalars = []
-
-# Check and extract the necessary scalar information
-if 'state' in obs:
-    state_info = obs['state']
-    # Example: If state_info is a dictionary with keys 'speed', 'location', etc.
+# Process the 'state' data to extract scalars
+def process_state(state_info):
+    scalars = []
     if isinstance(state_info, dict):
+        # Extract relevant scalar values
         speed = state_info.get('speed', 0.0)
-        # Assuming 'location' is a dictionary with 'x', 'y' coordinates
-        location = state_info.get('location', {'x': 0.0, 'y': 0.0})
-        if isinstance(location, dict):
-            loc_x = location.get('x', 0.0)
-            loc_y = location.get('y', 0.0)
-        else:
-            # Handle the case where location is not a dict
-            loc_x, loc_y = 0.0, 0.0
-
-        # Append the scalars to the list
-        scalars.extend([speed, loc_x, loc_y])
+        acceleration = state_info.get('acceleration', 0.0)
+        # Add more scalars as needed
+        scalars.extend([speed, acceleration])
     else:
-        # If state_info is not a dict, handle accordingly
-        pass
-else:
-    print("State information not found in observation.")
-    scalars = [0.0, 0.0, 0.0]  # Default values
+        # Handle other types if necessary
+        scalars = [0.0, 0.0]  # Default values
+    return np.array(scalars, dtype=np.float32)
 
-# Convert scalars to a NumPy array
-scalars = np.array(scalars, dtype=np.float32)
+scalars = process_state(obs['state'])
+
+# Ensure image is in the correct format (C, H, W)
+if image.shape[2] == 3:
+    # Convert image from (H, W, C) to (C, H, W)
+    image = np.transpose(image, (2, 0, 1))
+else:
+    print("Unexpected number of image channels:", image.shape[2])
+    exit()  # Exit the script if image format is unexpected
 
 # Get image dimensions
-input_height = image.shape[0]
-input_width = image.shape[1]
-input_channels = image.shape[2]  # Should be 3 for RGB images
+input_channels = image.shape[0]  # After transpose, channels are first
+input_height = image.shape[1]
+input_width = image.shape[2]
 
 scalar_dim = len(scalars)
 action_dim = env.action_space.shape[0]
@@ -122,25 +110,7 @@ for episode in range(num_episodes):
         image = obs['camera']
 
         # Process the 'state' data to extract scalars
-        scalars = []
-        if 'state' in obs:
-            state_info = obs['state']
-            if isinstance(state_info, dict):
-                speed = state_info.get('speed', 0.0)
-                location = state_info.get('location', {'x': 0.0, 'y': 0.0})
-                if isinstance(location, dict):
-                    loc_x = location.get('x', 0.0)
-                    loc_y = location.get('y', 0.0)
-                else:
-                    loc_x, loc_y = 0.0, 0.0
-
-                scalars.extend([speed, loc_x, loc_y])
-            else:
-                pass  # Handle other types if necessary
-        else:
-            scalars = [0.0, 0.0, 0.0]  # Default values
-
-        scalars = np.array(scalars, dtype=np.float32)
+        scalars = process_state(obs['state'])
 
         # Ensure image is in the correct format (C, H, W)
         if image.shape[2] == 3:
@@ -159,27 +129,7 @@ for episode in range(num_episodes):
 
         # Extract next image and scalars
         next_image = next_obs['camera']
-
-        # Process next 'state' data
-        next_scalars = []
-        if 'state' in next_obs:
-            next_state_info = next_obs['state']
-            if isinstance(next_state_info, dict):
-                next_speed = next_state_info.get('speed', 0.0)
-                next_location = next_state_info.get('location', {'x': 0.0, 'y': 0.0})
-                if isinstance(next_location, dict):
-                    next_loc_x = next_location.get('x', 0.0)
-                    next_loc_y = next_location.get('y', 0.0)
-                else:
-                    next_loc_x, next_loc_y = 0.0, 0.0
-
-                next_scalars.extend([next_speed, next_loc_x, next_loc_y])
-            else:
-                pass  # Handle other types if necessary
-        else:
-            next_scalars = [0.0, 0.0, 0.0]  # Default values
-
-        next_scalars = np.array(next_scalars, dtype=np.float32)
+        next_scalars = process_state(next_obs['state'])
 
         # Ensure next_image is in the correct format (C, H, W)
         if next_image.shape[2] == 3:
