@@ -22,6 +22,7 @@ env_config = {
     'render': False,
     'verbose': False,
     'seed': 0,
+    'random_seed': 0,  # Ensures reproducibility
     'weather': {
         'cloudiness': 0.0,
         'precipitation': 0.0,
@@ -33,8 +34,8 @@ env_config = {
         'fog_distance': 0.0,
         'wetness': 0.0,
     },
-    'number_of_vehicles': 0,
-    'number_of_walkers': 0,
+    'number_of_vehicles': 0,  # No traffic vehicles
+    'number_of_walkers': 0,   # No pedestrians
     'disable_two_wheels': True,
     'task_mode': 'straight',  # Options: 'random', 'straight', 'left', 'right'
     'max_time_episode': 1000,
@@ -61,7 +62,9 @@ env_config = {
     'collision_sensor': True,
     'lane_invasion_sensor': True,
     'manual_control': False,
-    'rgb_cam': {
+    
+    # Camera Configuration
+    'rgb_cam': {  # This will be disabled since we are using semantic segmentation
         'x': 1.5,  # Relative position in meters
         'y': 0.0,
         'z': 2.4,
@@ -73,9 +76,21 @@ env_config = {
         'fov': 100,
         'sensor_tick': 0.05,
     },
-    'use_image': True,
+    'semantic_segmentation_cam': {  # Added for semantic segmentation
+        'x': 1.5,  # Relative position in meters
+        'y': 0.0,
+        'z': 2.4,
+        'roll': 0.0,  # In degrees
+        'pitch': 0.0,
+        'yaw': 0.0,
+        'width': 640,
+        'height': 480,
+        'fov': 100,
+        'sensor_tick': 0.05,
+    },
+    'use_image': False,  # Disable RGB image
     'use_depth_camera': False,
-    'use_semantic_segmentation': False,
+    'use_semantic_segmentation': True,  # Enable semantic segmentation
     'early_termination': True,
     'reward_type': 'speed',  # Options: 'speed', 'distance', 'custom'
     'reward_weights': {
@@ -91,6 +106,44 @@ env_config = {
     'traffic_light': False,
     'hybrid': False,
     'behavior': 'normal',  # Options: 'cautious', 'normal', 'aggressive'
+    
+    # Disable Additional Sensors
+    'use_lidar': False,  # Disable LIDAR
+    'lidar_params': {
+        'range': 50.0,
+        'channels': 32,
+        'points_per_second': 100000,
+        'rotation_frequency': 10.0,
+        'upper_fov': 10.0,
+        'lower_fov': -30.0,
+        'dropoff_general_rate': 0.5,
+        'dropoff_intensity_limit': 0.8,
+    },
+    'use_gps': False,  # Disable GPS
+    'gps_params': {
+        'sensor_tick': 0.05,
+        'x': 0.0,
+        'y': 0.0,
+        'z': 0.0,
+    },
+    'use_imu': False,  # Disable IMU
+    'imu_params': {
+        'sensor_tick': 0.05,
+        'accelerometer_noise_stddev': 0.02,
+        'gyroscope_noise_stddev': 0.02,
+    },
+    'additional_sensors': [],  # No additional sensors
+    'rendering_resolution': [800, 600],
+    'sensor_tick': 0.05,  # Global sensor tick rate
+    'physics_tick': 50,  # Physics simulation tick rate
+    'vehicle_mass': 1500,  # Mass of the ego vehicle in kg
+    'vehicle_max_speed': 30.0,  # Max speed in m/s
+    'spawn_points': [],  # Custom spawn points
+    'town_map_path': '',  # Path to custom town map if any
+    'traffic_density': 0.0,  # No traffic
+    'pedestrian_density': 0.0,  # No pedestrians
+    'recording': False,  # Disable recording
+    'recording_path': 'recordings/',  # Path to save recordings
 }
 
 # Create environment
@@ -125,15 +178,15 @@ for episode in range(num_episodes):
     step = 0
 
     while not done and step < max_steps_per_episode:
-        # Extract image and scalars from observation
-        # Assuming obs is a dictionary with keys 'camera' and 'state'
-        image = obs['camera']  # Shape: (480, 640, 3)
+        # Extract segmentation image and scalars from observation
+        # Assuming obs is a dictionary with keys 'semantic_segmentation_cam' and 'state'
+        segmentation_image = obs['semantic_segmentation_cam']  # Shape: (480, 640, 3)
         speed = obs['state']['speed']  # Speed in km/h
         scalars = np.array([speed], dtype=np.float32)
 
-        # Preprocess image: convert to grayscale, resize, normalize
-        # Convert to grayscale
-        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Preprocess segmentation image: convert to grayscale, resize, normalize
+        # Convert to grayscale (if segmentation is in color, map to single channel)
+        gray_image = cv2.cvtColor(segmentation_image, cv2.COLOR_BGR2GRAY)
         # Resize to 640x480 if necessary (already 640x480 in this case)
         resized_image = cv2.resize(gray_image, (640, 480))
         # Normalize pixel values to [0, 1]
@@ -160,13 +213,13 @@ for episode in range(num_episodes):
         # Step in environment
         next_obs, reward, done, info = env.step(env_action)
 
-        # Extract next image and next scalars
-        next_image = next_obs['camera']
+        # Extract next segmentation image and next scalars
+        next_segmentation_image = next_obs['semantic_segmentation_cam']
         next_speed = next_obs['state']['speed']
         next_scalars = np.array([next_speed], dtype=np.float32)
 
-        # Preprocess next image
-        next_gray_image = cv2.cvtColor(next_image, cv2.COLOR_BGR2GRAY)
+        # Preprocess next segmentation image
+        next_gray_image = cv2.cvtColor(next_segmentation_image, cv2.COLOR_BGR2GRAY)
         next_resized_image = cv2.resize(next_gray_image, (640, 480))
         next_resized_image = next_resized_image.astype(np.float32) / 255.0
 
