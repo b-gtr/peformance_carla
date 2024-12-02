@@ -21,19 +21,7 @@ env_config = {
     'no_rendering_mode': False,
     'render': False,
     'verbose': False,
-    'discrete': False,
-    'continuous': True,
-    'max_time_episode': 1000,
-    'max_past_step': 1,
-    'dt': 0.05,
-    'desired_speed': 7.0,  # km/h
-    'max_ego_spawn_times': 200,
-    'display_size': 640,  # Screen size of bird-eye render
-    'obs_size': [640, 480],  # Observation size (width, height)
-    'window_size': 640,  # Screen size of the camera sensor
-    'reward_type': 'speed',  # Type of reward function
-    'number_of_vehicles': 0,
-    'number_of_pedestrians': 0,
+    'seed': 0,
     'weather': {
         'cloudiness': 0.0,
         'precipitation': 0.0,
@@ -45,8 +33,34 @@ env_config = {
         'fog_distance': 0.0,
         'wetness': 0.0,
     },
-    'task_mode': 'straight',  # Options: 'straight', 'left', 'right'
-    'random_seed': 0,
+    'number_of_vehicles': 0,
+    'number_of_walkers': 0,
+    'disable_two_wheels': True,
+    'task_mode': 'straight',  # Options: 'random', 'straight', 'left', 'right'
+    'max_time_episode': 1000,
+    'max_waypt': 12,
+    'obs_range': 32.0,
+    'lidar_bin': 0.125,
+    'd_behind': 12.0,
+    'out_lane_thres': 2.0,
+    'desired_speed': 7.0,  # km/h
+    'max_ego_spawn_times': 200,
+    'display_size': 640,  # Screen size of bird-eye render
+    'obs_size': [640, 480],  # Observation size (width, height)
+    'window_size': 800,  # Screen size of the pygame window
+    'max_past_step': 1,
+    'dt': 0.05,
+    'discrete': False,
+    'discrete_acc': [1.0],  # Not used when 'discrete' is False
+    'discrete_steer': [-0.2, 0.0, 0.2],  # Not used when 'discrete' is False
+    'continuous_accel_range': [-1.0, 1.0],  # For continuous actions
+    'continuous_steer_range': [-1.0, 1.0],
+    'ego_vehicle_filter': 'vehicle.lincoln*',
+    'traffic_vehicle_filter': 'vehicle.*',
+    'walker_filter': 'walker.pedestrian.*',
+    'collision_sensor': True,
+    'lane_invasion_sensor': True,
+    'manual_control': False,
     'rgb_cam': {
         'x': 1.5,  # Relative position in meters
         'y': 0.0,
@@ -57,15 +71,26 @@ env_config = {
         'width': 640,
         'height': 480,
         'fov': 100,
+        'sensor_tick': 0.05,
     },
-    'collision_sensor': True,
-    'lane_invasion_sensor': False,
-    'obs_range': 32.0,
-    'lidar_bin': 0.125,
-    'd_behind': 12.0,
     'use_image': True,
+    'use_depth_camera': False,
+    'use_semantic_segmentation': False,
     'early_termination': True,
-    'ego_vehicle_filter': 'vehicle.*',
+    'reward_type': 'speed',  # Options: 'speed', 'distance', 'custom'
+    'reward_weights': {
+        'collision': -100.0,
+        'speed': 1.0,
+        'steer': -0.05,
+        'out_of_lane': -10.0,
+        'distance': 1.0,
+    },
+    'continuous': True,
+    'random_spawn': False,
+    'dynamic': False,
+    'traffic_light': False,
+    'hybrid': False,
+    'behavior': 'normal',  # Options: 'cautious', 'normal', 'aggressive'
 }
 
 # Create environment
