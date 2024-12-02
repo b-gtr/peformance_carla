@@ -13,23 +13,59 @@ env_config = {
     'host': 'localhost',
     'port': 2000,
     'town': 'Town01',
+    'client_timeout': 10.0,
+    'traffic_manager_port': 8000,
+    'traffic_manager_seed': 0,
+    'traffic_manager_parameters': {'global_distance_to_leading_vehicle': 2.5},
+    'sync_mode': True,
+    'no_rendering_mode': False,
+    'render': False,
     'verbose': False,
-    'server_map': '/Game/Carla/Maps/Town01',
-    'number_of_vehicles': 0,
-    'number_of_pedestrians': 0,
-    'display_size': 640,  # Width and height of the output image
-    'obs_size': [640, 480],  # Observation image size [width, height]
-    'window_size': 640,
-    'max_past_step': 1,
-    'dt': 0.05,
     'discrete': False,
     'continuous': True,
     'max_time_episode': 1000,
-    'reward_fn': None,
-    'encode_state_fn': None,
-    'vehicles_list': None,
-    'task_mode': 'straight',  # Task mode can be 'straight', 'left', 'right', etc.
+    'max_past_step': 1,
+    'dt': 0.05,
+    'desired_speed': 7.0,  # km/h
+    'max_ego_spawn_times': 200,
+    'display_size': 640,  # Screen size of bird-eye render
+    'obs_size': [640, 480],  # Observation size (width, height)
+    'window_size': 640,  # Screen size of the camera sensor
+    'reward_type': 'speed',  # Type of reward function
+    'number_of_vehicles': 0,
+    'number_of_pedestrians': 0,
+    'weather': {
+        'cloudiness': 0.0,
+        'precipitation': 0.0,
+        'precipitation_deposits': 0.0,
+        'wind_intensity': 0.0,
+        'sun_azimuth_angle': 0.0,
+        'sun_altitude_angle': 90.0,
+        'fog_density': 0.0,
+        'fog_distance': 0.0,
+        'wetness': 0.0,
+    },
+    'task_mode': 'straight',  # Options: 'straight', 'left', 'right'
     'random_seed': 0,
+    'rgb_cam': {
+        'x': 1.5,  # Relative position in meters
+        'y': 0.0,
+        'z': 2.4,
+        'roll': 0.0,  # In degrees
+        'pitch': 0.0,
+        'yaw': 0.0,
+        'width': 640,
+        'height': 480,
+        'fov': 100,
+    },
+    'collision_sensor': True,
+    'lane_invasion_sensor': False,
+    'obs_range': 32.0,
+    'lidar_bin': 0.125,
+    'd_behind': 12.0,
+    'use_image': True,
+    'early_termination': True,
+    'ego_vehicle_filter': 'vehicle.*',
 }
 
 # Create environment
@@ -65,14 +101,15 @@ for episode in range(num_episodes):
 
     while not done and step < max_steps_per_episode:
         # Extract image and scalars from observation
-        image = obs[0]  # Assuming obs[0] contains the image
-        speed = obs[1]['speed']  # Assuming obs[1] contains state info with 'speed'
+        # Assuming obs is a dictionary with keys 'camera' and 'state'
+        image = obs['camera']  # Shape: (480, 640, 3)
+        speed = obs['state']['speed']  # Speed in km/h
         scalars = np.array([speed], dtype=np.float32)
 
         # Preprocess image: convert to grayscale, resize, normalize
         # Convert to grayscale
         gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        # Resize to 640x480
+        # Resize to 640x480 if necessary (already 640x480 in this case)
         resized_image = cv2.resize(gray_image, (640, 480))
         # Normalize pixel values to [0, 1]
         resized_image = resized_image.astype(np.float32) / 255.0
@@ -81,15 +118,26 @@ for episode in range(num_episodes):
         action = agent.act(resized_image, scalars)
 
         # Send action to environment
-        # Environment expects actions in [-1, 1], which matches the agent's output
-        env_action = action  # No scaling needed
+        # Map agent's action to environment action space
+        # Agent's action: [steering (-1 to 1), throttle (-1 to 1)]
+        # Environment expects:
+        #   steering: -1 to 1
+        #   throttle: 0 to 1
+        #   brake: 0 or 1
+        # Map throttle to [0, 1]
+        throttle = np.clip(action[1], 0.0, 1.0)
+        env_action = {
+            'steer': float(action[0]),  # Ensure it's a Python float
+            'throttle': float(throttle),
+            'brake': 0.0
+        }
 
         # Step in environment
-        next_obs, reward, done, _ = env.step(env_action)
+        next_obs, reward, done, info = env.step(env_action)
 
         # Extract next image and next scalars
-        next_image = next_obs[0]
-        next_speed = next_obs[1]['speed']
+        next_image = next_obs['camera']
+        next_speed = next_obs['state']['speed']
         next_scalars = np.array([next_speed], dtype=np.float32)
 
         # Preprocess next image
@@ -119,6 +167,6 @@ for episode in range(num_episodes):
         total_reward += reward
         step += 1
 
-    print(f"Episode {episode}, Total Reward: {total_reward}")
+    print(f"Episode {episode + 1}, Total Reward: {total_reward}")
 
 env.close()
