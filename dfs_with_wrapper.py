@@ -3,6 +3,7 @@ import gym_carla
 import numpy as np
 import torch
 import cv2
+import pygame  # Ensure pygame is imported if used elsewhere
 
 from preprocess import Preprocessor
 from soft_actor_critic import ParamsPool
@@ -48,9 +49,9 @@ env_config = {
     'max_ego_spawn_times': 200,
     
     # Display and Window Configuration
-    'display_size': [640, 480],  # Screen size of bird-eye render (width, height)
-    'obs_size': [640, 480],      # Observation size (width, height)
-    'window_size': [640, 480],   # Screen size of the pygame window (width, height)
+    'display_size': (640, 480),  # Changed from list to tuple
+    'obs_size': (640, 480),      # Changed from list to tuple
+    'window_size': (640, 480),   # Changed from list to tuple
     
     'max_past_step': 1,
     'dt': 0.05,
@@ -138,7 +139,7 @@ env_config = {
         'gyroscope_noise_stddev': 0.02,
     },
     'additional_sensors': [],  # No additional sensors
-    'rendering_resolution': [640, 480],  # Set to 640x480 as per requirement
+    'rendering_resolution': (640, 480),  # Changed from list to tuple
     'sensor_tick': 0.05,  # Global sensor tick rate
     'physics_tick': 50,  # Physics simulation tick rate
     'vehicle_mass': 1500,  # Mass of the ego vehicle in kg
@@ -153,6 +154,15 @@ env_config = {
 
 # Create environment
 env = gym.make('carla-v0', params=env_config)
+
+# Initialize Pygame Display (Ensure sizes are tuples)
+try:
+    pygame.init()
+    self.display = pygame.display.set_mode(env_config['window_size'])  # Ensure 'window_size' is a tuple
+except TypeError as e:
+    print(f"Error initializing pygame display: {e}")
+    pygame.quit()
+    raise
 
 # Create agent
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -232,7 +242,7 @@ for episode in range(num_episodes):
         # Convert segmentation image to label image
         segmentation_label = color_to_label(segmentation_image, color_to_class)
         # Resize to 640x480 if necessary (already 640x480 in this case)
-        resized_label = cv2.resize(segmentation_label, (640, 480), interpolation=cv2.INTER_NEAREST)
+        resized_label = cv2.resize(segmentation_label, env_config['obs_size'], interpolation=cv2.INTER_NEAREST)
         # Normalize label values if necessary (depends on your network)
         # For example, if you have N classes, you might leave them as integers [0, N-1]
         # Or normalize to [0, 1] by dividing by (N-1)
@@ -267,7 +277,7 @@ for episode in range(num_episodes):
 
         # Preprocess next segmentation image
         next_segmentation_label = color_to_label(next_segmentation_image, color_to_class)
-        next_resized_label = cv2.resize(next_segmentation_label, (640, 480), interpolation=cv2.INTER_NEAREST)
+        next_resized_label = cv2.resize(next_segmentation_label, env_config['obs_size'], interpolation=cv2.INTER_NEAREST)
         next_normalized_label = next_resized_label.astype(np.float32) / (num_classes - 1)
 
         # Store transition in replay buffer
@@ -295,3 +305,4 @@ for episode in range(num_episodes):
     print(f"Episode {episode + 1}, Total Reward: {total_reward}")
 
 env.close()
+pygame.quit()
