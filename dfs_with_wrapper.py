@@ -46,9 +46,12 @@ env_config = {
     'out_lane_thres': 2.0,
     'desired_speed': 7.0,  # km/h
     'max_ego_spawn_times': 200,
-    'display_size': 640,  # Screen size of bird-eye render
-    'obs_size': [640, 480],  # Observation size (width, height)
-    'window_size': 800,  # Screen size of the pygame window
+    
+    # Display and Window Configuration
+    'display_size': [640, 480],  # Screen size of bird-eye render (width, height)
+    'obs_size': [640, 480],      # Observation size (width, height)
+    'window_size': [640, 480],   # Screen size of the pygame window (width, height)
+    
     'max_past_step': 1,
     'dt': 0.05,
     'discrete': False,
@@ -88,6 +91,7 @@ env_config = {
         'fov': 100,
         'sensor_tick': 0.05,
     },
+    
     'use_image': False,  # Disable RGB image
     'use_depth_camera': False,
     'use_semantic_segmentation': True,  # Enable semantic segmentation
@@ -106,6 +110,7 @@ env_config = {
     'traffic_light': False,
     'hybrid': False,
     'behavior': 'normal',  # Options: 'cautious', 'normal', 'aggressive'
+    'display_route': True,  # **Added Parameter** to display the route
     
     # Disable Additional Sensors
     'use_lidar': False,  # Disable LIDAR
@@ -133,7 +138,7 @@ env_config = {
         'gyroscope_noise_stddev': 0.02,
     },
     'additional_sensors': [],  # No additional sensors
-    'rendering_resolution': [800, 600],
+    'rendering_resolution': [640, 480],  # Set to 640x480 as per requirement
     'sensor_tick': 0.05,  # Global sensor tick rate
     'physics_tick': 50,  # Physics simulation tick rate
     'vehicle_mass': 1500,  # Mass of the ego vehicle in kg
@@ -184,16 +189,58 @@ for episode in range(num_episodes):
         speed = obs['state']['speed']  # Speed in km/h
         scalars = np.array([speed], dtype=np.float32)
 
-        # Preprocess segmentation image: convert to grayscale, resize, normalize
-        # Convert to grayscale (if segmentation is in color, map to single channel)
-        gray_image = cv2.cvtColor(segmentation_image, cv2.COLOR_BGR2GRAY)
+        # Preprocess segmentation image
+        # **Important:** Semantic segmentation images use different colors for different classes.
+        # Instead of converting to grayscale, it's better to map colors to class indices.
+
+        # Define a color to class mapping (example, adjust based on your segmentation scheme)
+        color_to_class = {
+            (0, 0, 0): 0,            # Unknown
+            (70, 70, 70): 1,         # Building
+            (190, 153, 153): 2,      # Fence
+            (72, 0, 90): 3,          # Other
+            (220, 20, 60): 4,        # Pedestrian
+            (153, 153, 153): 5,      # Pole
+            (157, 234, 50): 6,       # Road
+            (128, 64, 128): 7,       # Road markings
+            (244, 35, 232): 8,        # Sidewalk
+            (107, 142, 35): 9,       # Vegetation
+            (0, 0, 142): 10,         # Vehicles
+            (0, 0, 70): 11,          # Walls
+            (0, 60, 100): 12,         # Traffic sign
+            (0, 80, 100): 13,         # Traffic light
+            (0, 0, 230): 14,          # Sky
+            (119, 11, 32): 15,        # Ground
+            # Add more mappings as per your semantic segmentation scheme
+        }
+
+        def color_to_label(segmentation_image, color_to_class_map):
+            """
+            Convert a color segmentation image to a label image.
+            Args:
+                segmentation_image (np.ndarray): HxWx3 image.
+                color_to_class_map (dict): Mapping from RGB tuples to class indices.
+            Returns:
+                label_image (np.ndarray): HxW image with class indices.
+            """
+            label_image = np.zeros(segmentation_image.shape[:2], dtype=np.int32)
+            for color, label in color_to_class_map.items():
+                matches = np.all(segmentation_image == color, axis=-1)
+                label_image[matches] = label
+            return label_image
+
+        # Convert segmentation image to label image
+        segmentation_label = color_to_label(segmentation_image, color_to_class)
         # Resize to 640x480 if necessary (already 640x480 in this case)
-        resized_image = cv2.resize(gray_image, (640, 480))
-        # Normalize pixel values to [0, 1]
-        resized_image = resized_image.astype(np.float32) / 255.0
+        resized_label = cv2.resize(segmentation_label, (640, 480), interpolation=cv2.INTER_NEAREST)
+        # Normalize label values if necessary (depends on your network)
+        # For example, if you have N classes, you might leave them as integers [0, N-1]
+        # Or normalize to [0, 1] by dividing by (N-1)
+        num_classes = len(color_to_class)
+        normalized_label = resized_label.astype(np.float32) / (num_classes - 1)
 
         # Agent acts
-        action = agent.act(resized_image, scalars)
+        action = agent.act(normalized_label, scalars)
 
         # Send action to environment
         # Map agent's action to environment action space
@@ -219,17 +266,17 @@ for episode in range(num_episodes):
         next_scalars = np.array([next_speed], dtype=np.float32)
 
         # Preprocess next segmentation image
-        next_gray_image = cv2.cvtColor(next_segmentation_image, cv2.COLOR_BGR2GRAY)
-        next_resized_image = cv2.resize(next_gray_image, (640, 480))
-        next_resized_image = next_resized_image.astype(np.float32) / 255.0
+        next_segmentation_label = color_to_label(next_segmentation_image, color_to_class)
+        next_resized_label = cv2.resize(next_segmentation_label, (640, 480), interpolation=cv2.INTER_NEAREST)
+        next_normalized_label = next_resized_label.astype(np.float32) / (num_classes - 1)
 
         # Store transition in replay buffer
         transition = Transition(
-            img=resized_image,
+            img=normalized_label,
             scalars=scalars,
             a=action,
             r=reward,
-            n_img=next_resized_image,
+            n_img=next_normalized_label,
             n_scalars=next_scalars,
             d=done
         )
