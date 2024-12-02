@@ -1,164 +1,124 @@
-# main.py
-
 import gym
 import gym_carla
+import numpy as np
+import torch
+import cv2
+
+from preprocess import Preprocessor
 from soft_actor_critic import ParamsPool
 from replay_buffer import ReplayBuffer, Transition
-import torch
-import numpy as np
 
-# Set up device
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-# Initialize the environment
-env_params = {
-    'number_of_vehicles': 0,  # Set to 0 as per your request
-    'number_of_walkers': 0,   # Set to 0 as per your request
-    'display_size': 480,      # Height of the display (adjusted to 480)
-    'max_past_step': 1,       # The number of past steps to draw
-    'dt': 0.1,                # Time interval between two frames
-    'discrete': False,        # Whether to use discrete control space
-    'discrete_acc': [1.0],    # Discrete value of accelerations
-    'discrete_steer': [-0.2, 0.0, 0.2],  # Discrete value of steering angles
-    'continuous_accel_range': [-1.0, 1.0],  # Continuous acceleration range
-    'continuous_steer_range': [-0.3, 0.3],  # Continuous steering angle range
-    'ego_vehicle_filter': 'vehicle.lincoln*',  # Filter for defining ego vehicle
-    'port': 2000,             # Connection port
-    'town': 'Town03',         # Which town to simulate
-    'task_mode': 'random',    # Mode of the task
-    'max_time_episode': 500,  # Maximum timesteps per episode
-    'max_waypt': 12,          # Maximum number of waypoints
-    'obs_range': 32,          # Observation range (meter)
-    'lidar_bin': 0.125,       # Bin size of lidar sensor (meter)
-    'd_behind': 12,           # Distance behind the ego vehicle (meter)
-    'out_lane_thres': 2.0,    # Threshold for out of lane
-    'desired_speed': 8,       # Desired speed (m/s)
-    'max_ego_spawn_times': 200,  # Maximum times to spawn ego vehicle
-    'display_route': True,    # Whether to display the route
-    'pixor_size': 64,         # Size of the PIXOR image
+# Set up environment configuration
+env_config = {
+    'host': 'localhost',
+    'port': 2000,
+    'town': 'Town01',
+    'verbose': False,
+    'server_map': '/Game/Carla/Maps/Town01',
+    'number_of_vehicles': 0,
+    'number_of_pedestrians': 0,
+    'display_size': 640,  # Width and height of the output image
+    'obs_size': [640, 480],  # Observation image size [width, height]
+    'window_size': 640,
+    'max_past_step': 1,
+    'dt': 0.05,
+    'discrete': False,
+    'continuous': True,
+    'max_time_episode': 1000,
+    'reward_fn': None,
+    'encode_state_fn': None,
+    'vehicles_list': None,
+    'task_mode': 'straight',  # Task mode can be 'straight', 'left', 'right', etc.
+    'random_seed': 0,
 }
 
-env = gym.make('carla-v0', params=env_params)
+# Create environment
+env = gym.make('carla-v0', params=env_config)
 
-# Reset environment to get initial observation
-obs = env.reset()
-
-# Extract image and scalars from observation
-image = obs['camera']  # Assuming 'camera' is the key for the image data
-
-# Process the 'state' data to extract scalars
-def process_state(state_info):
-    scalars = []
-    if isinstance(state_info, dict):
-        # Extract relevant scalar values
-        speed = state_info.get('speed', 0.0)
-        acceleration = state_info.get('acceleration', 0.0)
-        # Add more scalars as needed
-        scalars.extend([speed, acceleration])
-    else:
-        # Handle other types if necessary
-        scalars = [0.0, 0.0]  # Default values
-    return np.array(scalars, dtype=np.float32)
-
-scalars = process_state(obs['state'])
-
-# Ensure image is in the correct format (C, H, W)
-if image.shape[2] == 3:
-    # Convert image from (H, W, C) to (C, H, W)
-    image = np.transpose(image, (2, 0, 1))
-else:
-    print("Unexpected number of image channels:", image.shape[2])
-    exit()  # Exit the script if image format is unexpected
-
-# Get image dimensions
-input_channels = image.shape[0]  # After transpose, channels are first
-input_height = image.shape[1]
-input_width = image.shape[2]
-
-scalar_dim = len(scalars)
-action_dim = env.action_space.shape[0]
-
-feature_dim = 256  # Output size of Preprocessor
-
+# Create agent
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 agent = ParamsPool(
-    feature_dim=feature_dim,
-    scalar_dim=scalar_dim,
-    action_dim=action_dim,
-    input_height=input_height,
-    input_width=input_width,
+    feature_dim=256,
+    scalar_dim=1,  # Use speed as scalar input
+    action_dim=2,  # Steering and throttle
+    input_height=480,
+    input_width=640,
+    activate_scale=False,
     device=device
 )
 
-# Initialize replay buffer
-buffer_capacity = 1000000
+# Create replay buffer
+buffer_capacity = 100000
 replay_buffer = ReplayBuffer(capacity=buffer_capacity, device=device)
 
 # Training loop parameters
 num_episodes = 1000
-max_steps = 1000
-batch_size = 256
+max_steps_per_episode = 1000
+batch_size = 64
+update_every = 1  # Update agent every step
 
 for episode in range(num_episodes):
     obs = env.reset()
+    total_reward = 0
     done = False
     step = 0
-    total_reward = 0.0
 
-    while not done and step < max_steps:
+    while not done and step < max_steps_per_episode:
         # Extract image and scalars from observation
-        image = obs['camera']
+        image = obs[0]  # Assuming obs[0] contains the image
+        speed = obs[1]['speed']  # Assuming obs[1] contains state info with 'speed'
+        scalars = np.array([speed], dtype=np.float32)
 
-        # Process the 'state' data to extract scalars
-        scalars = process_state(obs['state'])
+        # Preprocess image: convert to grayscale, resize, normalize
+        # Convert to grayscale
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Resize to 640x480
+        resized_image = cv2.resize(gray_image, (640, 480))
+        # Normalize pixel values to [0, 1]
+        resized_image = resized_image.astype(np.float32) / 255.0
 
-        # Ensure image is in the correct format (C, H, W)
-        if image.shape[2] == 3:
-            # Convert image from (H, W, C) to (C, H, W)
-            image = np.transpose(image, (2, 0, 1))
-        else:
-            print("Unexpected number of image channels:", image.shape[2])
-            break  # Exit the loop if image format is unexpected
+        # Agent acts
+        action = agent.act(resized_image, scalars)
 
-        # Get action from agent
-        action = agent.act(image, scalars)
+        # Send action to environment
+        # Environment expects actions in [-1, 1], which matches the agent's output
+        env_action = action  # No scaling needed
 
-        # Take step in the environment
-        next_obs, reward, done, info = env.step(action)
-        total_reward += reward
+        # Step in environment
+        next_obs, reward, done, _ = env.step(env_action)
 
-        # Extract next image and scalars
-        next_image = next_obs['camera']
-        next_scalars = process_state(next_obs['state'])
+        # Extract next image and next scalars
+        next_image = next_obs[0]
+        next_speed = next_obs[1]['speed']
+        next_scalars = np.array([next_speed], dtype=np.float32)
 
-        # Ensure next_image is in the correct format (C, H, W)
-        if next_image.shape[2] == 3:
-            next_image = np.transpose(next_image, (2, 0, 1))
-        else:
-            print("Unexpected number of next image channels:", next_image.shape[2])
-            break  # Exit the loop if image format is unexpected
+        # Preprocess next image
+        next_gray_image = cv2.cvtColor(next_image, cv2.COLOR_BGR2GRAY)
+        next_resized_image = cv2.resize(next_gray_image, (640, 480))
+        next_resized_image = next_resized_image.astype(np.float32) / 255.0
 
         # Store transition in replay buffer
         transition = Transition(
-            img=image,
+            img=resized_image,
             scalars=scalars,
             a=action,
             r=reward,
-            n_img=next_image,
+            n_img=next_resized_image,
             n_scalars=next_scalars,
             d=done
         )
         replay_buffer.push(transition)
 
-        # Update agent if enough samples in buffer
+        # Update agent
         if replay_buffer.ready_for(batch_size):
             batch = replay_buffer.sample(batch_size)
             agent.update_networks(batch)
 
-        # Prepare for next step
+        # Move to next time step
         obs = next_obs
+        total_reward += reward
         step += 1
 
-    print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {total_reward}")
+    print(f"Episode {episode}, Total Reward: {total_reward}")
 
-    # Optionally save model after each episode
-    agent.save_model('model_checkpoint.pth')
+env.close()
