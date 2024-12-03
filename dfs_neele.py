@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod
+from abc import ABC, abstractmethod  
 import math
 import threading
 import carla
@@ -7,40 +7,18 @@ import numpy as np
 import torch
 import pygame
 import random
-import time
-import hashlib  # Hinzugefügt für Bild-Hashing
-import os       # Hinzugefügt für Dateisystemoperationen
+import os  # Importiert os
 from params_pool2 import ParamsPool
 from replay_buffer import ReplayBuffer, Transition
 
-# ===========================
-# =        CONFIGURATIONS    =
-# ===========================
-
-# Trainingsparameter
+# Training parameters
 NUM_EPISODES = 1000
 MAX_STEPS_PER_EPISODE = 1000
 BATCH_SIZE = 64
-LOAD_MODEL = False  # Auf True setzen, um ein gespeichertes Modell zu laden
+LOAD_MODEL = False  # Set to True if you want to load a saved model
 
-# Debugging-Parameter
-DEBUG = True  # Auf True setzen, um detaillierte Logs zu aktivieren
-
-# Hashing-Parameter
-HASH_CHECK_INTERVAL = 70  # Intervall für Bildüberprüfung
-HASH_HISTORY_LIMIT = HASH_CHECK_INTERVAL  # Anzahl der gespeicherten Hashes
-
-# Bildspeicher-Parameter
-SAVE_IMAGES = True  # Auf True setzen, um Bilder zu speichern
-RGB_IMAGE_DIR = 'saved_images/rgb'
-LABEL_IMAGE_DIR = 'saved_images/labels'
-
-# Initialisiere Gerät
+# Initialize device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-# ===========================
-# =        SENSOR KLASSEN    =
-# ===========================
 
 class Sensor(ABC):
     def __init__(self, vehicle):
@@ -61,7 +39,7 @@ class Sensor(ABC):
                 self.sensor.destroy()
             except RuntimeError as e:
                 print(f"Error destroying sensor: {e}")
-
+    
     def get_history(self):
         return self.history
 
@@ -119,10 +97,6 @@ class CameraSensor(Sensor):
     def listen(self):
         self.sensor.listen(self.image_processor_callback)
 
-# ===========================
-# =        UMGEBUNG         =
-# ===========================
-
 class CarlaEnv:
     def __init__(self):
         self.client = carla.Client('localhost', 2000)
@@ -141,12 +115,12 @@ class CarlaEnv:
         self.image_lock = threading.Lock()
         self.running = True
 
-        # Initialize Pygame und Display einrichten
+        # Initialize Pygame and set up display
         pygame.init()
         self.display = pygame.display.set_mode((640, 480))
         pygame.display.set_caption("CARLA Semantic Segmentation")
 
-        # Synchronous Modus
+        # Synchronous mode
         self.original_settings = self.world.get_settings()
         settings = self.world.get_settings()
         settings.synchronous_mode = True
@@ -157,32 +131,12 @@ class CarlaEnv:
         self.agent_image = None
         self.display_surface = None
 
-        # Bild-Update Tracking
-        self.image_timestamp = 0.0
-        self.image_counter = 0  # Zähler für Bild-Updates
-
-        # Hashing-Tracking
-        self.image_hashes = []  # Liste zur Speicherung von Bild-Hashes
-
-        # Bildspeicher initialisieren
-        if SAVE_IMAGES:
-            self.setup_image_saving()
-
         self.reset_environment()
-
-    def setup_image_saving(self):
-        """
-        Erstellt die Verzeichnisse für das Speichern von Bildern, falls sie nicht existieren.
-        """
-        os.makedirs(RGB_IMAGE_DIR, exist_ok=True)
-        os.makedirs(LABEL_IMAGE_DIR, exist_ok=True)
-        if DEBUG:
-            print(f"[DEBUG] Bildspeicher-Verzeichnisse erstellt: '{RGB_IMAGE_DIR}' und '{LABEL_IMAGE_DIR}'")
 
     def reset_environment(self):
         self._clear_sensors()
 
-        # Fahrzeug zerstören, wenn es existiert
+        # Destroy vehicle if it exists
         if self.vehicle is not None:
             self.vehicle.destroy()
             self.vehicle = None
@@ -192,33 +146,33 @@ class CarlaEnv:
         self.gnss_sensor = None
         self.camera_sensor = None
 
-        # Fahrzeug an zufälligem Spawn-Punkt spawnen
+        # Spawn vehicle at random spawn point
         vehicle_bp = self.blueprint_library.filter('vehicle.lincoln.mkz_2017')[0]
-        self.spawn_point = random.choice(self.spawn_points)  # Zufälligen Spawn-Punkt wählen
+        self.spawn_point = self.spawn_points[0]
         self.spawn_rotation = self.spawn_point.rotation
         self.vehicle = self.world.spawn_actor(vehicle_bp, self.spawn_point)
 
-        # Sensoren anhängen
+        # Attach sensors
         self.setup_sensors()
 
-        # Warten, bis Sensoren initialisiert sind
+        # Wait for sensors to initialize
         for _ in range(10):
             self.world.tick()
 
     def setup_sensors(self):
-        # Kamera-Sensor
+        # Camera sensor
         self.camera_sensor = CameraSensor(self.vehicle, self.blueprint_library, self.world, self.process_image)
         self.camera_sensor.listen()
 
-        # Kollisionssensor
+        # Collision sensor
         self.collision_sensor = CollisionSensor(self.vehicle, self.blueprint_library, self.world)
         self.collision_sensor.listen()
 
-        # Spur-Invasionssensor
+        # Lane invasion sensor
         self.lane_invasion_sensor = LaneInvasionSensor(self.vehicle, self.blueprint_library, self.world)
         self.lane_invasion_sensor.listen()
 
-        # GNSS-Sensor
+        # GNSS sensor
         self.gnss_sensor = GnssSensor(self.vehicle, self.blueprint_library, self.world)
         self.gnss_sensor.listen()
 
@@ -233,98 +187,28 @@ class CarlaEnv:
             self.gnss_sensor.destroy()
         self.latest_image = None
         self.agent_image = None
-        self.display_surface = None
 
     def process_image(self, image):
-        try:
-            # Bild für die Anzeige konvertieren
-            image.convert(carla.ColorConverter.CityScapesPalette)
+        # Convert image for display
+        image.convert(carla.ColorConverter.CityScapesPalette)
+        array = np.frombuffer(image.raw_data, dtype=np.uint8)
+        array = array.reshape((image.height, image.width, 4))
+        rgb_array = array[:, :, :3]  # Extract RGB channels
+
+        with self.image_lock:
+            self.latest_image = rgb_array.copy()
+
+            # Get labels for the agent
+            image.convert(carla.ColorConverter.Raw)
             array = np.frombuffer(image.raw_data, dtype=np.uint8)
             array = array.reshape((image.height, image.width, 4))
-            rgb_array = array[:, :, :3]  # RGB-Kanäle extrahieren
+            labels = array[:, :, 2]  # Extract labels from the red channel
 
-            with self.image_lock:
-                self.latest_image = rgb_array.copy()
-                self.image_counter += 1  # Bildzähler erhöhen
-                self.image_timestamp = time.time()  # Zeitstempel aktualisieren
+            # Normalize labels
+            self.agent_image = labels / 22.0  # Normalize to [0, 1]
 
-                # Labels für den Agenten erhalten
-                image.convert(carla.ColorConverter.Raw)
-                array = np.frombuffer(image.raw_data, dtype=np.uint8)
-                array = array.reshape((image.height, image.width, 4))
-                labels = array[:, :, 2]  # Labels aus dem roten Kanal extrahieren
-
-                # Labels normalisieren
-                self.agent_image = labels / 22.0  # Normalisieren auf [0, 1]
-
-                # Pygame-Oberfläche für die Anzeige erstellen
-                self.display_surface = pygame.surfarray.make_surface(rgb_array.swapaxes(0, 1))
-
-                # Bild-Hash berechnen und speichern
-                image_hash = self.hash_image(self.agent_image)
-                self.image_hashes.append(image_hash)
-                if len(self.image_hashes) > HASH_HISTORY_LIMIT:
-                    self.image_hashes.pop(0)  # Ältesten Hash entfernen
-
-                # Bilddaten speichern
-                if SAVE_IMAGES:
-                    self.save_images(rgb_array, labels)
-
-            if DEBUG:
-                print(f"[DEBUG] Bild verarbeitet um {self.image_timestamp}, Gesamtbilder: {self.image_counter}, Hash: {image_hash}")
-
-            # Alle 70 Bilder die Hashes überprüfen
-            if self.image_counter % HASH_CHECK_INTERVAL == 0:
-                self.check_image_hashes()
-
-        except Exception as e:
-            print(f"Fehler bei der Bildverarbeitung: {e}")
-
-    def hash_image(self, image_array):
-        """
-        Erstellt einen SHA256-Hash des gegebenen Bildarrays.
-        """
-        # Stellen Sie sicher, dass das Array in einem konsistenten Format ist
-        image_bytes = image_array.tobytes()
-        return hashlib.sha256(image_bytes).hexdigest()
-
-    def check_image_hashes(self):
-        """
-        Überprüft, ob alle gespeicherten Bild-Hashes gleich sind.
-        """
-        if len(self.image_hashes) != HASH_CHECK_INTERVAL:
-            # Noch nicht genug Bilder gesammelt
-            return
-
-        first_hash = self.image_hashes[0]
-        all_same = all(h == first_hash for h in self.image_hashes)
-
-        if all_same:
-            print(f"[WARNING] Alle {HASH_CHECK_INTERVAL} Bilder sind identisch! Mögliche Bildwiederverwendung erkannt.")
-        else:
-            if DEBUG:
-                print(f"[DEBUG] Bild-Hash-Überprüfung erfolgreich: {HASH_CHECK_INTERVAL} unterschiedliche Bilder vorhanden.")
-
-    def save_images(self, rgb_array, labels):
-        """
-        Speichert die RGB- und Label-Bilder in externen Dateien.
-        """
-        try:
-            # Formatieren des Dateinamens basierend auf dem Bildzähler
-            rgb_filename = os.path.join(RGB_IMAGE_DIR, f"rgb_{self.image_counter:06d}.png")
-            label_filename = os.path.join(LABEL_IMAGE_DIR, f"labels_{self.image_counter:06d}.png")
-
-            # Speichern des RGB-Bildes
-            cv2.imwrite(rgb_filename, cv2.cvtColor(rgb_array, cv2.COLOR_RGB2BGR))
-
-            # Labels wieder in den ursprünglichen Bereich bringen und speichern
-            labels_uint8 = (labels).astype(np.uint8)  # Annahme: Labels sind bereits im Bereich [0, 22]
-            cv2.imwrite(label_filename, labels_uint8)
-
-            if DEBUG and self.image_counter % 100 == 0:
-                print(f"[DEBUG] Bilder gespeichert: {rgb_filename}, {label_filename}")
-        except Exception as e:
-            print(f"Fehler beim Speichern der Bilder: {e}")
+            # Create Pygame surface for display
+            self.display_surface = pygame.surfarray.make_surface(rgb_array.swapaxes(0, 1))
 
     def get_vehicle_speed(self):
         vel = self.vehicle.get_velocity()
@@ -342,10 +226,10 @@ class CarlaEnv:
                 pygame.display.flip()
 
     def destroy(self):
-        # Ursprüngliche Einstellungen wiederherstellen
+        # Restore original settings
         self.world.apply_settings(self.original_settings)
 
-        # Akteure bereinigen
+        # Clean up actors
         if self.camera_sensor is not None:
             self.camera_sensor.destroy()
         if self.collision_sensor is not None:
@@ -356,16 +240,31 @@ class CarlaEnv:
             self.gnss_sensor.destroy()
         if self.vehicle is not None:
             self.vehicle.destroy()
-        pygame.quit()  # Pygame beenden
+        pygame.quit()  # Quit Pygame
 
-# ===========================
-# =        TRAINING LOOP     =
-# ===========================
+def save_images_to_txt(current_image, next_image, file_path):
+    """
+    Speichert sowohl current_agent_image als auch next_agent_image in eine Textdatei.
+    Jede Zeile enthält beide Bilder, getrennt durch einen Semikolon.
+    """
+    if current_image is not None and next_image is not None:
+        # Flache Darstellung der Arrays
+        flat_current = current_image.flatten()
+        flat_next = next_image.flatten()
+        # Konvertieren in Strings mit Kommas getrennt
+        current_str = ','.join(map(str, flat_current))
+        next_str = ','.join(map(str, flat_next))
+        # Schreiben in die Datei
+        with open(file_path, 'a') as f:
+            f.write(f"current_agent_image:{current_str};next_agent_image:{next_str}\n")
 
 def train_agent(env, agent, replay_buffer, num_episodes=1000, max_steps_per_episode=1000, batch_size=64):
-    try:
-        previous_image_counter = env.image_counter  # Initialisiere vorherigen Bildzähler
+    image_save_path = 'current_agent_images.txt'
+    # Optional: Datei initialisieren (leeren, falls bereits vorhanden)
+    with open(image_save_path, 'w') as f:
+        f.write('')  # Leere Datei erstellen oder vorhandene leeren
 
+    try:
         for episode in range(num_episodes):
             if not env.running:
                 break
@@ -385,20 +284,11 @@ def train_agent(env, agent, replay_buffer, num_episodes=1000, max_steps_per_epis
 
                 with env.image_lock:
                     current_agent_image = env.agent_image.copy() if env.agent_image is not None else None
-                    current_image_timestamp = env.image_timestamp
 
                 current_gnss = env.gnss_sensor.get_current_gnss()
                 if current_agent_image is None or current_gnss is None:
                     env.world.tick()
                     continue
-
-                # Log Bild-Update
-                if DEBUG:
-                    print(f"[DEBUG] Episode {episode+1}, Schritt {step}: Bildzähler = {env.image_counter}")
-
-                # Überprüfen, ob ein neues Bild empfangen wurde
-                assert env.image_counter > previous_image_counter, "Bild wurde wiederverwendet! Zähler hat sich nicht erhöht."
-                previous_image_counter = env.image_counter  # Für den nächsten Schritt aktualisieren
 
                 transform = env.vehicle.get_transform()
                 location = transform.location
@@ -444,7 +334,9 @@ def train_agent(env, agent, replay_buffer, num_episodes=1000, max_steps_per_epis
 
                 with env.image_lock:
                     next_agent_image = env.agent_image.copy() if env.agent_image is not None else None
-                    next_image_timestamp = env.image_timestamp
+
+                # Speichern beider Bilder in die Textdatei
+                save_images_to_txt(current_agent_image, next_agent_image, image_save_path)
 
                 transform = env.vehicle.get_transform()
                 location = transform.location
@@ -488,9 +380,8 @@ def train_agent(env, agent, replay_buffer, num_episodes=1000, max_steps_per_epis
 
                 episode_reward += reward
 
-                if DEBUG:
-                    print(f"[DEBUG] Episode {episode+1}, Schritt {step}, Belohnung: {reward:.2f}, Gesamte Belohnung: {episode_reward:.2f}")
-                    print(f"[DEBUG] r_travel: {r_traveled}")
+                print(f"Episode {episode+1}, Step {step}, Reward: {reward:.2f}, Total Reward: {episode_reward:.2f}")
+                print(f"r_travel {r_traveled}")
 
                 transition = Transition(
                     img=current_agent_image,
@@ -511,39 +402,21 @@ def train_agent(env, agent, replay_buffer, num_episodes=1000, max_steps_per_epis
                 env.render_display()
 
                 if done:
-                    if DEBUG:
-                        print(f"[DEBUG] Episode {episode+1} beendet aufgrund von {termination_reason}.")
                     break
 
                 previous_distance = distance_to_destination
 
-            print(f'Episode {episode+1}, Gesamte Belohnung: {episode_reward:.2f}')
+            print(f'Episode {episode+1}, Total Reward: {episode_reward:.2f}')
             if (episode + 1) % 50 == 0:
                 agent.save_model('model_params.pth')
-                print(f'Modellparameter nach Episode {episode+1} gespeichert.')
+                print(f'Model parameters saved after episode {episode+1}.')
 
-        print('Training abgeschlossen.')
+        print('Training completed.')
 
     finally:
         env.destroy()
 
-# ===========================
-# =          MAIN            =
-# ===========================
-
 def main():
-    # Konfigurationsparameter ausgeben
-    print("===== Konfigurationsparameter =====")
-    print(f"Anzahl der Episoden: {NUM_EPISODES}")
-    print(f"Maximale Schritte pro Episode: {MAX_STEPS_PER_EPISODE}")
-    print(f"Batch-Größe: {BATCH_SIZE}")
-    print(f"Modell laden: {LOAD_MODEL}")
-    print(f"Gerät: {device}")
-    print(f"Debug-Modus: {DEBUG}")
-    print(f"Hash-Überprüfungsintervall: {HASH_CHECK_INTERVAL}")
-    print(f"Bildspeicherung aktiviert: {SAVE_IMAGES}")
-    print("===================================\n")
-
     env = CarlaEnv()
     input_height = 480
     input_width = 640
@@ -559,12 +432,10 @@ def main():
                        device=device)
     replay_buffer = ReplayBuffer(capacity=25000, device=device)
 
-    if LOAD_MODEL:
-        try:
-            agent.load_model('model_params.pth')
-            print('Modellparameter geladen.')
-        except Exception as e:
-            print(f"Laden der Modellparameter fehlgeschlagen: {e}")
+    load_model = input("Do you want to load saved model parameters? (y/n): ")
+    if load_model.lower() == 'y':
+        agent.load_model('model_params.pth')
+        print('Model parameters loaded.')
 
     train_agent(env, agent, replay_buffer,
                 num_episodes=NUM_EPISODES,
